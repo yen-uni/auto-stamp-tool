@@ -80,4 +80,4 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("**📍 印章座標位置 (公分)**")
 st.sidebar.caption("提示：標準 A4 紙張約為 21 寬 × 29.7 高 (公分)")
 x_pos_cm = st.sidebar.number_input("X座標 (從左邊界起算, 公分)", value=14.00, min_value=0.00, max_value=100.00, step=0.01, format="%.2f")
-y_pos_cm = st.sidebar.number_input("Y座標 (從上邊界起算, 公分)", value=6.00, min_value=0.00, max_value=10
+y_pos_cm = st.sidebar.number_input("Y座標 (從上邊界起算, 公分)", value=6.00, min_value=0.00, max_value=100.00, step=0.01, format="%.2f")
