@@ -4,8 +4,8 @@ from PIL import Image
 import numpy as np
 import io
 
-# 設定網頁標題與圖示
-st.set_page_config(page_title="環久自動蓋章套印小工具 (已修正旋轉問題)", page_icon="📄", layout="wide")
+# 1. 修正網頁標題
+st.set_page_config(page_title="環久國際機構-蓋章小工具V6極速版", page_icon="📄", layout="wide")
 
 # --- 雲端變數密碼防護 (Streamlit Cloud 專用) ---
 def check_password():
@@ -41,7 +41,6 @@ def check_password():
 CM_TO_PTS = 28.346
 
 # --- 影像處理函式 (包含去背、透明度、翻轉與【新增的旋轉】) ---
-# 【修改處 1】：函式簽名新增 `rotation_angle` 參數
 def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
     # 讀取圖片並轉為 RGBA
     img = Image.open(img_file).convert("RGBA")
@@ -65,7 +64,7 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
     if flip_v:
         img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
     
-    # 4. 【新增】旋轉處理
+    # 4. 旋轉處理
     # 使用 `expand=True` 確保旋轉後不會被裁剪
     if rotation_angle != 0:
         img = img.rotate(rotation_angle, expand=True)
@@ -73,7 +72,8 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
     return img
 
 # --- 網頁主要畫面 ---
-st.title("📄 專屬自動蓋章小工具 (已修正旋轉問題)")
+# 1. 修正主標題
+st.title("📄 環久國際機構-蓋章小工具V6極速版")
 st.markdown("只需上傳 PDF 與印章，**修改左側數值，下方的預覽畫面會「即時」自動更新！**")
 
 # --- 左側設定選單 ---
@@ -89,7 +89,7 @@ st.sidebar.caption("提示：標準 A4 紙張約為 21 寬 × 29.7 高 (公分)"
 x_pos_cm = st.sidebar.number_input("X座標 (從左邊界起算, 公分)", value=14.00, min_value=0.00, max_value=100.00, step=0.01, format="%.2f")
 y_pos_cm = st.sidebar.number_input("Y座標 (從上邊界起算, 公分)", value=6.00, min_value=0.00, max_value=100.00, step=0.01, format="%.2f")
 
-# --- 新增：防呆警告機制 ---
+# --- 防呆警告機制 ---
 if x_pos_cm > 21.0 or y_pos_cm > 29.7:
     st.sidebar.warning("⚠️ **注意：印章可能已超出 A4 紙張範圍！**\n\n標準 A4 寬度約 21 公分、高度約 29.7 公分。若數值過大，印章會蓋在畫面外而看不見。")
 # ------------------------
@@ -113,9 +113,13 @@ auto_bg_remove = st.sidebar.checkbox("✨ 自動濾除印章白底", value=True)
 flip_horizontal = st.sidebar.checkbox("↔️ 水平翻轉 (解決左右相反)", value=False)
 flip_vertical = st.sidebar.checkbox("↕️ 垂直翻轉 (解決上下相反)", value=False)
 
-# 【修改處 2】：在 UI 中新增旋轉滑桿
-# 將步長設為 90 度，最實用
-rotation_angle = st.sidebar.slider("🔄 印章旋轉角度", min_value=0, max_value=360, value=0, step=90, help="可以手動旋轉印章，例如 90、180、270 度。預設為 0 度。此為【幾何旋轉】，與【水平/垂直翻轉】不同。")
+# 2. 修改旋轉滑桿：使用 select_slider 來清楚顯示特定刻度
+rotation_angle = st.sidebar.select_slider(
+    "🔄 印章旋轉角度", 
+    options=[0, 90, 180, 270, 360], 
+    value=0, 
+    help="可以手動旋轉印章。預設為 0 度。此為【幾何旋轉】，與【水平/垂直翻轉】不同。"
+)
 
 # --- 檔案上傳區 ---
 col1, col2 = st.columns(2)
@@ -133,8 +137,7 @@ if pdf_file and stamp_file:
         stamp_file.seek(0)
         pdf_file.seek(0)
         
-        # 1. 處理印章圖檔 (去背 + 透明度 + 翻轉 + 【新增的旋轉】)
-        # 【修改處 3】：呼叫函式時傳遞 `rotation_angle`
+        # 1. 處理印章圖檔 (去背 + 透明度 + 翻轉 + 旋轉)
         final_stamp = process_stamp(stamp_file, auto_bg_remove, flip_horizontal, flip_vertical, rotation_angle, stamp_opacity)
         stamp_bytes_io = io.BytesIO()
         final_stamp.save(stamp_bytes_io, format="PNG")
@@ -147,21 +150,6 @@ if pdf_file and stamp_file:
         if page_index < 0 or page_index >= len(doc):
             st.error(f"❌ 錯誤：這份 PDF 沒有第 {page_num} 頁！(總頁數: {len(doc)})")
         else:
-            # 定義印章要蓋的區塊位置
-            # 使用新計算的 `rect` (因為旋轉後圖像大小可能改變)
-            # Pillow 的 `expand=True` 會改變圖像的寬高，但 Rect 的中心點需要調整
-            # 簡化起見，直接蓋在左上角 (x_pos, y_pos)，大小由印章決定
-            
-            # 使用 `get_pixmap()` 來獲取圖像資訊是準確的，但此處直接使用Rect
-            # 我們需要知道 Pillow 旋轉後印章的實際像素寬高
-            # pillow_stamp_w, pillow_stamp_h = final_stamp.size
-            # 此處繼續使用使用者輸入的 stamp_w, stamp_h。這可能在旋轉時產生變形
-            
-            # 關鍵點：在 PyMuPDF 中，Rect 定義了一個不變形的大小框。
-            # 如果我們想保持 Pillow 的旋轉效果 (包括旋轉後的長寬比改變)，
-            # 最好是根據 Pillow 旋轉後的長寬比來動態調整Rect的stamp_h。
-            # 這裡簡化，直接將寬度維持 stamp_w，高度由 Pillow 計算出的高度決定 (保持長寬比)。
-            
             # Pillow final_stamp.width / final_stamp.height = 長寬比
             pillow_ratio = final_stamp.width / final_stamp.height
             # 我們設定 rect 寬度 = stamp_w。 rect 高度 = stamp_w / pillow_ratio
@@ -178,7 +166,7 @@ if pdf_file and stamp_file:
                 page = doc[page_index]
                 page.insert_image(rect, stream=stamp_bytes)
             
-            # 3. 產生高畫質預覽圖 (永遠只預覽選定的那一頁，避免系統卡頓)
+            # 3. 產生高畫質預覽圖
             preview_page = doc[page_index]
             st.markdown(f"### 👁️ 蓋章即時預覽 (第 {page_num} 頁)")
             zoom_matrix = fitz.Matrix(2.0, 2.0) 
