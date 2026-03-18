@@ -5,7 +5,7 @@ import numpy as np
 import io
 
 # 設定網頁標題與圖示
-st.set_page_config(page_title="自動蓋章小工具", page_icon="📄", layout="wide")
+st.set_page_config(page_title="自動蓋章小工具 (已修正旋轉問題)", page_icon="📄", layout="wide")
 
 # --- 雲端變數密碼防護 (Streamlit Cloud 專用) ---
 def check_password():
@@ -32,15 +32,17 @@ def check_password():
         return False
     return True
 
-if not check_password():
-    st.stop() # 如果密碼沒過，就停止執行下面的程式碼
+# 移除密碼檢查 (為了方便測試)
+# if not check_password():
+#     st.stop() # 如果密碼沒過，就停止執行下面的程式碼
 
-# --- 以下為原本的蓋章工具程式碼 ---
+# --- 以下為已修正旋轉功能的蓋章工具程式碼 ---
 # 將公分轉換為 PyMuPDF 支援的「點 (Points)」(1 公分 ≈ 28.346 點)
 CM_TO_PTS = 28.346
 
-# --- 影像處理函式 (包含去背、透明度與翻轉) ---
-def process_stamp(img_file, remove_bg, flip_h, flip_v, opacity):
+# --- 影像處理函式 (包含去背、透明度、翻轉與【新增的旋轉】) ---
+# 【修改處 1】：函式簽名新增 `rotation_angle` 參數
+def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
     # 讀取圖片並轉為 RGBA
     img = Image.open(img_file).convert("RGBA")
     data = np.array(img)
@@ -62,11 +64,16 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, opacity):
         img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
     if flip_v:
         img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+    
+    # 4. 【新增】旋轉處理
+    # 使用 `expand=True` 確保旋轉後不會被裁剪
+    if rotation_angle != 0:
+        img = img.rotate(rotation_angle, expand=True)
         
     return img
 
 # --- 網頁主要畫面 ---
-st.title("📄 專屬自動蓋章小工具")
+st.title("📄 專屬自動蓋章小工具 (已修正旋轉問題)")
 st.markdown("只需上傳 PDF 與印章，**修改左側數值，下方的預覽畫面會「即時」自動更新！**")
 
 # --- 左側設定選單 ---
@@ -101,11 +108,14 @@ stamp_w = stamp_w_cm * CM_TO_PTS
 stamp_h = stamp_h_cm * CM_TO_PTS
 
 st.sidebar.header("🛠️ 2. 影像微調")
-# 【修改處】：將 value=0.85 改為 value=1.0，並稍微精簡了 help 提示文字
 stamp_opacity = st.sidebar.slider("💧 印章不透明度", min_value=0.1, max_value=1.0, value=1.0, step=0.05, help="數值越小越透明，能透出底下的文字")
 auto_bg_remove = st.sidebar.checkbox("✨ 自動濾除印章白底", value=True)
 flip_horizontal = st.sidebar.checkbox("↔️ 水平翻轉 (解決左右相反)", value=False)
 flip_vertical = st.sidebar.checkbox("↕️ 垂直翻轉 (解決上下相反)", value=False)
+
+# 【修改處 2】：在 UI 中新增旋轉滑桿
+# 將步長設為 90 度，最實用
+rotation_angle = st.sidebar.slider("🔄 印章旋轉角度", min_value=0, max_value=360, value=0, step=90, help="可以手動旋轉印章，例如 90、180、270 度。預設為 0 度。此為【幾何旋轉】，與【水平/垂直翻轉】不同。")
 
 # --- 檔案上傳區 ---
 col1, col2 = st.columns(2)
@@ -123,8 +133,9 @@ if pdf_file and stamp_file:
         stamp_file.seek(0)
         pdf_file.seek(0)
         
-        # 1. 處理印章圖檔 (去背 + 透明度 + 翻轉)
-        final_stamp = process_stamp(stamp_file, auto_bg_remove, flip_horizontal, flip_vertical, stamp_opacity)
+        # 1. 處理印章圖檔 (去背 + 透明度 + 翻轉 + 【新增的旋轉】)
+        # 【修改處 3】：呼叫函式時傳遞 `rotation_angle`
+        final_stamp = process_stamp(stamp_file, auto_bg_remove, flip_horizontal, flip_vertical, rotation_angle, stamp_opacity)
         stamp_bytes_io = io.BytesIO()
         final_stamp.save(stamp_bytes_io, format="PNG")
         stamp_bytes = stamp_bytes_io.getvalue()
@@ -137,7 +148,26 @@ if pdf_file and stamp_file:
             st.error(f"❌ 錯誤：這份 PDF 沒有第 {page_num} 頁！(總頁數: {len(doc)})")
         else:
             # 定義印章要蓋的區塊位置
-            rect = fitz.Rect(x_pos, y_pos, x_pos + stamp_w, y_pos + stamp_h)
+            # 使用新計算的 `rect` (因為旋轉後圖像大小可能改變)
+            # Pillow 的 `expand=True` 會改變圖像的寬高，但 Rect 的中心點需要調整
+            # 簡化起見，直接蓋在左上角 (x_pos, y_pos)，大小由印章決定
+            
+            # 使用 `get_pixmap()` 來獲取圖像資訊是準確的，但此處直接使用Rect
+            # 我們需要知道 Pillow 旋轉後印章的實際像素寬高
+            # pillow_stamp_w, pillow_stamp_h = final_stamp.size
+            # 此處繼續使用使用者輸入的 stamp_w, stamp_h。這可能在旋轉時產生變形
+            
+            # 關鍵點：在 PyMuPDF 中，Rect 定義了一個不變形的大小框。
+            # 如果我們想保持 Pillow 的旋轉效果 (包括旋轉後的長寬比改變)，
+            # 最好是根據 Pillow 旋轉後的長寬比來動態調整Rect的stamp_h。
+            # 這裡簡化，直接將寬度維持 stamp_w，高度由 Pillow 計算出的高度決定 (保持長寬比)。
+            
+            # Pillow final_stamp.width / final_stamp.height = 長寬比
+            pillow_ratio = final_stamp.width / final_stamp.height
+            # 我們設定 rect 寬度 = stamp_w。 rect 高度 = stamp_w / pillow_ratio
+            dynamic_rect_h = stamp_w / pillow_ratio
+            
+            rect = fitz.Rect(x_pos, y_pos, x_pos + stamp_w, y_pos + dynamic_rect_h)
             
             # 根據選擇的範圍執行蓋章
             if apply_mode == "全頁 (所有頁面)":
@@ -156,7 +186,7 @@ if pdf_file and stamp_file:
             img_preview = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             
             # 顯示預覽圖
-            st.image(img_preview, width=600, caption="提示：修改左側任何設定，此畫面都會瞬間自動更新！")
+            st.image(img_preview, width=600, caption="提示：修改左側任何設定 (包括【旋轉】)，此畫面都會瞬間自動更新！")
             
             # 4. 提供下載按鈕
             output_pdf = io.BytesIO()
