@@ -5,7 +5,7 @@ import numpy as np
 import io
 
 # 設定網頁標題與圖示
-st.set_page_config(page_title="自動蓋章小工具 (已修正旋轉問題)", page_icon="📄", layout="wide")
+st.set_page_config(page_title="環久自動蓋章套印小工具 (已修正旋轉問題)", page_icon="📄", layout="wide")
 
 # --- 雲端變數密碼防護 (Streamlit Cloud 專用) ---
 def check_password():
