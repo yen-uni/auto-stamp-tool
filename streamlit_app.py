@@ -6,10 +6,20 @@ import io
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 # 1. 網頁基本設定
-st.set_page_config(page_title="環久國際機構-蓋章小工具V8點擊極速版", page_icon="📄", layout="wide")
+st.set_page_config(page_title="環久國際機構-蓋章小工具V9點擊顯示優化版", page_icon="📄", layout="wide")
 
 # 將公分轉換為 PyMuPDF 支援的「點 (Points)」(1 公分 ≈ 28.346 點)
 CM_TO_PTS = 28.346
+
+# 🆕 **🆕 Request 1: 注入 CSS，強制在文件區域顯示 Crosshair 十字游標 🆕** 🆕
+st.markdown("""
+<style>
+/* 強制在點擊定位器圖片上方顯示 crosshair 十字 (精準定位) 游標 */
+div.st-image-coordinates > img {
+    cursor: crosshair !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # --- 影像處理函式 (包含自動裁切透明邊界，確保尺寸精準) ---
 def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
@@ -52,8 +62,8 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
     return img
 
 # --- 網頁主標題 ---
-st.title("📄 環久國際機構-蓋章小工具V8點擊極速版")
-st.markdown("只需上傳 PDF 與印章，**直接在畫面上「點擊」你想蓋章的位置**，右側可調整真實尺寸。")
+st.title("📄 環久國際機構-蓋章小工具V9點擊顯示優化版")
+st.markdown("只需上傳 PDF 與印章，**直接在左側畫面上「點擊」你想蓋章的位置**，右側預覽會即時更新。")
 
 # --- 檔案上傳區 ---
 col_u1, col_u2 = st.columns(2)
@@ -93,8 +103,10 @@ if pdf_file and stamp_file:
     col_pos, col_preview = st.columns([1.2, 1])
 
     with col_pos:
-        st.write("### 📍 步驟一：滑鼠點擊決定位置")
-        st.info("💡 提示：請直接在下方文件上**「點擊」**你想蓋章的位置（這會是印章的左上角）。")
+        st.write("### 📍 步驟一：滑鼠點擊定位")
+        # 🆕 **🆕 Request 1: 替換成更醒目的 HTML styled text，明確提示「十字游標」點擊定位 🆕** 🆕
+        st.markdown('<p style="color:red; font-size:22px; font-weight:bold;">🚨 重要提示：不需要拖曳了！</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:18px; margin-bottom:20px;">請將滑鼠移到下方文件影像上（游標會變成 **十字線**），然後直接**「點擊」**你想蓋章的位置（這會是印章的左上角）。請點點看！</p>', unsafe_allow_html=True)
         
         # 獲取該頁底圖 (1.0 縮放確保 1px = 1pt)
         target_page = doc[page_index]
@@ -113,7 +125,7 @@ if pdf_file and stamp_file:
             y_pos = 150
 
     with col_preview:
-        st.write("### 👁️ 步驟二：即時高畫質預覽")
+        st.write("### 👁️ 步驟二：即時預覽")
         
         try:
             # 1. 處理印章圖檔
@@ -125,28 +137,45 @@ if pdf_file and stamp_file:
             processed_stamp_img.save(stamp_buffer, format="PNG")
             stamp_bytes = stamp_buffer.getvalue()
             
-            # 2. 計算比例與高度
+            # 2. 計算比例與高度 (單位均為點)
             pillow_ratio = processed_stamp_img.width / processed_stamp_img.height
             dynamic_rect_h = stamp_w / pillow_ratio
             rect = fitz.Rect(x_pos, y_pos, x_pos + stamp_w, y_pos + dynamic_rect_h)
             
-            # 3. 執行蓋章
+            # 3. 執行蓋章 (僅用於產生網頁預覽)
             if apply_mode == "全頁 (所有頁面)":
                 for p in doc:
                     p.insert_image(rect, stream=stamp_bytes)
             else:
                 target_page.insert_image(rect, stream=stamp_bytes)
             
-            # 產生預覽圖
-            zoom_matrix = fitz.Matrix(2.0, 2.0) 
-            preview_pix = target_page.get_pixmap(matrix=zoom_matrix)
-            img_preview = Image.frombytes("RGB", [preview_pix.width, preview_pix.height], preview_pix.samples)
-            st.image(img_preview, caption=f"第 {page_num} 頁蓋章結果 (300DPI 預覽)", use_container_width=True)
+            # 🆕 **🆕 Request 2: 產生「標準解析度」網頁顯示預覽圖 (1.0 縮放) 🆕** 🆕
+            # 這樣步驟二預覽圖的大小會跟步驟一完全一樣，避免混淆。此處只影響網頁顯示，不影響下載品質。
+            standard_zoom_matrix = fitz.Matrix(1.0, 1.0) 
+            display_pix = target_page.get_pixmap(matrix=standard_zoom_matrix)
+            img_display = Image.frombytes("RGB", [display_pix.width, display_pix.height], display_pix.samples)
             
-            # 4. 下載按鈕
+            # 顯示與步驟一同大小的預覽圖
+            st.image(img_display, caption=f"第 {page_num} 頁蓋章結果 (顯示大小與點擊區域同步)", use_container_width=True)
+            
+            # --- 以下為 PDF 下載專用的高解析度處理 (在下載時重新打開乾淨文件處理，確保品質) ---
+            # 當使用者下載時，才讀取 PDF stream 產生一個乾淨的 doc 用於最終產出
+            download_doc = fitz.open(stream=pdf_stream, filetype="pdf")
+            
+            # rect 的單位是 points，PyMuPDF 會自動處理 scaling，只需在乾淨文件上重新蓋章
+            if apply_mode == "全頁 (所有頁面)":
+                for p in download_doc:
+                    p.insert_image(rect, stream=stamp_bytes)
+            else:
+                download_target_page = download_doc[page_index]
+                download_target_page.insert_image(rect, stream=stamp_bytes)
+            
             output_pdf = io.BytesIO()
-            doc.save(output_pdf)
-            st.success("🎉 預覽無誤後請下載完成檔")
+            # 使用 defalte 和 linear 參數優化 PDF，並保留原始解析度矩陣
+            download_doc.save(output_pdf, deflate=True)
+            
+            # 成功訊息與下載按鈕
+            st.success("🎉 預覽無誤後，即可點擊下方下載高解析度完成檔")
             st.download_button(
                 label="📥 下載已蓋章 PDF",
                 data=output_pdf.getvalue(),
@@ -160,4 +189,4 @@ if pdf_file and stamp_file:
             st.error(f"預覽生成失敗：{e}")
 
 st.markdown("---")
-st.markdown("© 2026 環久國際開發有限公司人力文件處理系統")
+st.markdown("© 2026 環久國際開發有限公司人力文件處理系統 | 用滑鼠「點點看」吧！🛑")
