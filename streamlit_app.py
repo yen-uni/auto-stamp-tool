@@ -5,7 +5,7 @@ import numpy as np
 import io
 from streamlit_cropper import st_cropper
 
-st.set_page_config(page_title="環久國際機構-蓋章小工具V8 (視覺對位版)", page_icon="📄", layout="wide")
+st.set_page_config(page_title="環久國際機構-蓋章小工具V8.1 (UI優化版)", page_icon="📄", layout="wide")
 
 # 將公分轉換為 PyMuPDF 支援的「點 (Points)」(1 公分 ≈ 28.346 點)
 CM_TO_PTS = 28.346
@@ -48,7 +48,7 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
             
     return img
 
-st.title("📄 環久國際機構-蓋章小工具V8 (視覺校正版)")
+st.title("📄 環久國際機構-蓋章小工具V8.1")
 
 # ==========================================
 # 側邊欄：全域印章設定 (步驟一與步驟二共用)
@@ -79,26 +79,26 @@ with tab1:
     if ref_pdf_file and stamp_file:
         st.markdown("---")
         st.markdown("### 2. 拖曳對照尺寸")
-        st.info("💡 **操作方式**：將紅框拖曳到參考文件上的舊印章位置，並調整左側的「印章寬度(公分)」，直到下方預覽圖的數位印章與舊印章大小完美重合。")
+        st.info("💡 **操作方式**：將藍框拖曳並縮放至舊印章位置（拉邊緣小方塊可縮放），並調整左側的「印章寬度」，直到右方預覽圖的數位印章完美重合。")
         
-        # 讀取參考 PDF 第一頁作為底圖
         ref_doc = fitz.open(stream=ref_pdf_file.read(), filetype="pdf")
         ref_page = ref_doc[0]
         ref_pix = ref_page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
         ref_bg_img = Image.frombytes("RGB", [ref_pix.width, ref_pix.height], ref_pix.samples)
         
-        # 處理數位印章
         stamp_file.seek(0)
         final_stamp = process_stamp(stamp_file, auto_bg_remove, False, False, rotation_angle, stamp_opacity)
         
         col_ref1, col_ref2 = st.columns([1.2, 1])
         with col_ref1:
-            # 取得對準座標
             ref_coords = st_cropper(ref_bg_img, aspect_ratio=None, box_color='#0000FF', return_type='box', key='ref_cropper')
         
         with col_ref2:
             st.markdown("**🔍 對照預覽區**")
-            # 換算尺寸與紅框中心點
+            
+            # 【優化】將提示訊息移至圖面上方
+            st.success("✅ 尺寸確認 OK 後，請切換到上方「步驟二」頁籤。")
+            
             stamp_w_pts = stamp_w_cm * CM_TO_PTS
             pillow_ratio = final_stamp.width / final_stamp.height
             stamp_h_pts = stamp_w_pts / pillow_ratio
@@ -106,13 +106,11 @@ with tab1:
             center_x = ref_coords['left'] + (ref_coords['width'] / 2)
             center_y = ref_coords['top'] + (ref_coords['height'] / 2)
             
-            # 從中心點反推左上/右下座標
             rect_x0 = center_x - (stamp_w_pts / 2)
             rect_y0 = center_y - (stamp_h_pts / 2)
             rect_x1 = center_x + (stamp_w_pts / 2)
             rect_y1 = center_y + (stamp_h_pts / 2)
             
-            # 將數位印章貼上預覽圖
             preview_doc = fitz.open(stream=ref_pdf_file.getvalue(), filetype="pdf")
             rect = fitz.Rect(rect_x0, rect_y0, rect_x1, rect_y1)
             
@@ -120,13 +118,14 @@ with tab1:
             final_stamp.save(stamp_bytes_io, format="PNG")
             preview_doc[0].insert_image(rect, stream=stamp_bytes_io.getvalue())
             
-            # 渲染高畫質預覽
             zoom_matrix = fitz.Matrix(2.0, 2.0)
             preview_img_pix = preview_doc[0].get_pixmap(matrix=zoom_matrix)
             preview_img = Image.frombytes("RGB", [preview_img_pix.width, preview_img_pix.height], preview_img_pix.samples)
             
-            st.image(preview_img, caption=f"對位預覽 (印章設定為 {stamp_w_cm} 公分)", use_container_width=True)
-            st.success("✅ 尺寸確認 OK 後，請切換到上方「步驟二」頁籤。")
+            # 【優化】利用欄位比例將圖面縮小為 80% (1:8:1) 並置中
+            c1, c2, c3 = st.columns([1, 8, 1])
+            with c2:
+                st.image(preview_img, caption=f"對位預覽 (印章設定為 {stamp_w_cm} 公分)", use_container_width=True)
 
 # ------------------------------------------
 # 🖨️ 步驟二：套印新文件
@@ -138,7 +137,7 @@ with tab2:
     if target_pdf_file and stamp_file:
         st.markdown("---")
         st.markdown("### 2. 中心點定位與蓋章")
-        st.info("💡 **提示**：請移動紅框，將紅框的 **「正中心」** 對準您要蓋章的目標位置。系統會以紅框中心點作為印章的正中心進行套印。")
+        st.info("💡 **提示**：請移動紅框（可縮放大小輔助對位），將紅框的 **「正中心」** 對準目標位置。系統會以紅框中心點進行套印。")
         
         target_doc = fitz.open(stream=target_pdf_file.read(), filetype="pdf")
         
@@ -156,19 +155,16 @@ with tab2:
         col_main1, col_main2 = st.columns([1.2, 1])
         
         with col_main1:
-            # 取得紅框座標
             box_coords = st_cropper(target_bg_img, aspect_ratio=None, box_color='#FF0000', return_type='box', key='target_cropper')
             
         with col_main2:
             st.markdown("**📄 最終成品預覽**")
             
-            # 重新處理一次印章 (以防使用者在側邊欄改了設定)
             stamp_file.seek(0)
             final_stamp = process_stamp(stamp_file, auto_bg_remove, False, False, rotation_angle, stamp_opacity)
             stamp_bytes_io = io.BytesIO()
             final_stamp.save(stamp_bytes_io, format="PNG")
             
-            # --- 核心邏輯：紅框正中心換算 ---
             center_x = box_coords['left'] + (box_coords['width'] / 2)
             center_y = box_coords['top'] + (box_coords['height'] / 2)
             
@@ -183,23 +179,16 @@ with tab2:
             
             rect = fitz.Rect(rect_x0, rect_y0, rect_x1, rect_y1)
             
-            # 執行蓋章
             if apply_mode == "全頁 (所有頁面)":
                 for p in target_doc:
                     p.insert_image(rect, stream=stamp_bytes_io.getvalue())
             else:
                 target_page.insert_image(rect, stream=stamp_bytes_io.getvalue())
                 
-            # 渲染高畫質成品預覽
-            zoom_matrix = fitz.Matrix(2.0, 2.0)
-            final_pix = target_page.get_pixmap(matrix=zoom_matrix)
-            final_img = Image.frombytes("RGB", [final_pix.width, final_pix.height], final_pix.samples)
-            
-            st.image(final_img, caption="最終成品預覽 (中心點對位)", use_container_width=True)
-            
             output_pdf = io.BytesIO()
             target_doc.save(output_pdf)
             
+            # 【優化】將下載按鈕移至圖面上方
             st.download_button(
                 label="📥 點我下載已蓋章 PDF",
                 data=output_pdf.getvalue(),
@@ -208,3 +197,12 @@ with tab2:
                 type="primary",
                 use_container_width=True
             )
+            
+            zoom_matrix = fitz.Matrix(2.0, 2.0)
+            final_pix = target_page.get_pixmap(matrix=zoom_matrix)
+            final_img = Image.frombytes("RGB", [final_pix.width, final_pix.height], final_pix.samples)
+            
+            # 【優化】利用欄位比例將圖面縮小為 80% (1:8:1) 並置中
+            c4, c5, c6 = st.columns([1, 8, 1])
+            with c5:
+                st.image(final_img, caption="最終成品預覽 (中心點對位)", use_container_width=True)
