@@ -5,14 +5,12 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 # ==========================================
 # 0. 頁面基本設定與 CSS 注入
 # ==========================================
-# 設定寬版頁面，讓左右兩欄有足夠空間
 st.set_page_config(layout="wide", page_title="蓋章小工具")
 
 # 強制將圖片互動區塊與 Canvas 的滑鼠游標改成十字線
 st.markdown(
     """
     <style>
-    /* 針對 Streamlit 圖片與互動元件修改游標 */
     [data-testid="stImage"] img, canvas, .stImage {
         cursor: crosshair !important;
     }
@@ -21,8 +19,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# 初始化 Session State 來儲存點擊座標，避免拉動滑桿時印章消失
+if "stamp_pos" not in st.session_state:
+    st.session_state.stamp_pos = None
+
 # ==========================================
-# 1. 側邊欄 UI (依照你的截圖還原設定項)
+# 1. 側邊欄 UI
 # ==========================================
 st.sidebar.title("⚙️ 1. 頁面設定")
 stamp_width_cm = st.sidebar.number_input("印章寬度 (公分)", min_value=1.0, value=3.0, step=0.1)
@@ -41,15 +43,21 @@ with col_up2:
     stamp_file = st.file_uploader("上傳印章檔案", type=['png', 'jpg', 'jpeg'])
 
 # ==========================================
-# 3. 主程式邏輯 (有上傳檔案才執行)
+# 3. 主程式邏輯
 # ==========================================
 if doc_file and stamp_file:
-    # 將上傳的檔案讀取為 PIL Image，並統一轉為 RGBA 以支援透明度
+    # 讀取並統一轉為 RGBA 以支援透明度處理
     doc_img = Image.open(doc_file).convert("RGBA")
     stamp_img = Image.open(stamp_file).convert("RGBA")
 
+    # 效能優化：如果文件原圖太大(超過1600px)，先進行縮放，避免點擊時發生嚴重延遲或失效
+    max_width = 1600
+    if doc_img.width > max_width:
+        ratio = max_width / doc_img.width
+        new_h = int(doc_img.height * ratio)
+        doc_img = doc_img.resize((max_width, new_h), Image.Resampling.LANCZOS)
+
     # --- 印章前處理 (大小、旋轉、透明度) ---
-    # 簡單的比例換算示範 (可依據實際需求調整像素換算公式)
     stamp_ratio = (stamp_width_cm * 30) / stamp_img.width  
     new_size = (int(stamp_img.width * stamp_ratio), int(stamp_img.height * stamp_ratio))
     
@@ -59,11 +67,11 @@ if doc_file and stamp_file:
     # 處理旋轉 (expand=True 確保旋轉後圖片不被裁切)
     stamp_img = stamp_img.rotate(rotation, expand=True)
     
-    # 處理透明度
+    # 處理透明度 (更穩定的 RGBA 通道合併寫法)
     if opacity < 1.0:
-        alpha = stamp_img.split()[3]
-        alpha = alpha.point(lambda p: p * opacity)
-        stamp_img.putalpha(alpha)
+        r, g, b, a = stamp_img.split()
+        a = a.point(lambda p: p * opacity)
+        stamp_img = Image.merge("RGBA", (r, g, b, a))
 
     # --- 左右雙欄對比顯示 ---
     col1, col2 = st.columns(2)
@@ -71,27 +79,28 @@ if doc_file and stamp_file:
     with col1:
         st.markdown("📍 **步驟一：滑鼠點擊定位**")
         st.markdown("🚨 <span style='color:red'>**重要提示：不需要拖曳了！**</span>", unsafe_allow_html=True)
-        st.write("請將滑鼠移到下方文件影像上（游標會變成十字線），然後直接「點擊」你想蓋章的位置（這會是印章的左上角）。請點點看！")
+        st.markdown("請將滑鼠移到下方文件影像上（游標會變成十字線），然後直接「點擊」你想蓋章的位置（這會是印章的左上角）。請點點看！")
         
-        # 關鍵 1：使用 streamlit_image_coordinates 獲取座標
-        # 關鍵 2：設定 use_column_width=True，讓圖片撐滿欄寬，解決大小不一的問題
+        # 獲取點擊座標
         clicked_value = streamlit_image_coordinates(doc_img, key="doc_click", use_column_width=True)
+        
+        # 如果有新的點擊，更新 session_state
+        if clicked_value is not None:
+            st.session_state.stamp_pos = (clicked_value["x"], clicked_value["y"])
 
     with col2:
         st.markdown("👁️ **步驟二：即時預覽**")
+        # 補齊兩行空白，消除與左側步驟一的高低差
+        st.markdown("<br><br>", unsafe_allow_html=True)
         
-        # 複製一份原圖來進行合成，避免污染原始檔案
         preview_img = doc_img.copy()
 
-        if clicked_value is not None:
-            # streamlit_image_coordinates 回傳的 x, y 已經自動換算成「原始圖片」的真實座標！
-            x = clicked_value["x"]
-            y = clicked_value["y"]
-            
-            # 將印章貼到原圖上 (第三個參數 stamp_img 作為遮罩，確保去背背景透明)
+        # 使用 session_state 中記錄的座標來蓋章
+        if st.session_state.stamp_pos is not None:
+            x, y = st.session_state.stamp_pos
             preview_img.paste(stamp_img, (x, y), stamp_img)
 
-        # 顯示預覽圖，設定 use_container_width=True 確保與左圖等寬
+        # 顯示預覽圖
         st.image(preview_img, use_container_width=True)
 
 else:
