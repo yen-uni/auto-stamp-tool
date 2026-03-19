@@ -94,18 +94,21 @@ if pdf_file and stamp_file:
             'left': 150,   # 從左側算起 150 point
             'width': 150,  # 框線寬度 150 point
             'height': 150  # 框線高度 150 point
-        }
+    st.write("### 📍 步驟一：拖曳紅框決定位置")
+        st.info("💡 提示：紅框本身多大都沒關係！請直接拖曳紅框，把紅框的「左上角」對準你要蓋章的位置即可，印章實際大小由側邊欄決定。")
         
-        # 使用 cropper 但只取座標 (return_type='box')
+        # 使用 cropper 但只取座標 (移除會報錯的 initial_box)
         box_coords = st_cropper(
             pdf_bg_img, 
             aspect_ratio=None, 
             box_color='#FF0000',
             return_type='box',  # 關鍵：不回傳圖片，只回傳座標字典
-            key='stamp_positioner',
-            initial_box=initial_box_config # 🆕 **🆕 加入初始框設定** 🆕
+            key='stamp_positioner'
         )
         
+        # 轉換座標：抓取紅框的左上角 (top-left) 作為蓋章起點
+        x_pos = box_coords['left']
+        y_pos = box_coords['top']
         # 轉換座標：cropper 回傳的是 pixel，但在我們的設定下 1 pixel = 1 point
         x_pos = box_coords['left']
         y_pos = box_coords['top']
