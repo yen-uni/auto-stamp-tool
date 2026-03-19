@@ -3,13 +3,35 @@ import fitz  # PyMuPDF
 from PIL import Image
 import numpy as np
 import io
-from streamlit_cropper import st_cropper
+from streamlit_image_coordinates import streamlit_image_coordinates
 
-st.set_page_config(page_title="環久國際機構-蓋章小工具V7極速版", page_icon="📄", layout="wide")
+st.set_page_config(page_title="環久國際機構-蓋章小工具V7互動極速版", page_icon="📄", layout="wide")
+
+# ==========================================
+# 0. CSS 游標注入與狀態初始化
+# ==========================================
+# 強制游標顯示為十字線
+st.markdown(
+    """
+    <style>
+    [data-testid="stImage"] img, canvas, .stImage {
+        cursor: crosshair !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# 初始化 Session State 來穩定儲存點擊座標
+if "stamp_pos" not in st.session_state:
+    st.session_state.stamp_pos = None
 
 # 將公分轉換為 PyMuPDF 支援的「點 (Points)」(1 公分 ≈ 28.346 點)
 CM_TO_PTS = 28.346
 
+# ==========================================
+# 1. 核心影像處理函式 (完全保留你原本的邏輯)
+# ==========================================
 def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
     # 讀取圖片並轉為 RGBA
     img = Image.open(img_file).convert("RGBA")
@@ -22,8 +44,7 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
         data[..., 3][white_areas.T] = 0
         img = Image.fromarray(data)
     
-    # 2. 自動裁切透明邊界 (這步是解決「實際尺寸不符」的關鍵！)
-    # 取得圖片中非透明區域的邊界框，並將多餘的透明像素裁掉
+    # 2. 自動裁切透明邊界 (解決「實際尺寸不符」的關鍵！)
     bbox = img.getbbox()
     if bbox:
         img = img.crop(bbox)
@@ -50,83 +71,119 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
             
     return img
 
-st.title("📄 環久國際機構-蓋章小工具V7極速版")
-st.markdown("請先上傳檔案，接著**在預覽圖上拖曳紅框**決定印章左上角位置，右側可微調真實大小！")
+st.title("📄 環久國際機構-蓋章小工具V7互動極速版")
+st.markdown("請先上傳檔案，接著**在下方預覽圖上直接點擊**決定印章位置，右側側邊欄可微調真實大小！")
 
-# --- 檔案上傳區 (移到最上方，有檔案才顯示後續設定) ---
+# ==========================================
+# 2. 檔案上傳區
+# ==========================================
 col_upload1, col_upload2 = st.columns(2)
 with col_upload1:
     pdf_file = st.file_uploader("📁 1. 上傳 PDF 檔案", type=["pdf"])
 with col_upload2:
     stamp_file = st.file_uploader("💮 2. 上傳印章圖檔", type=["png", "jpg", "jpeg"])
 
+# ==========================================
+# 3. 主程式邏輯 (單一互動畫面)
+# ==========================================
 if pdf_file and stamp_file:
     st.markdown("---")
     
-    # --- 讀取 PDF 並產生第一頁的背景圖供定位使用 ---
+    # 讀取 PDF
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     
-    # 側邊欄：頁面設定
+    # --- 側邊欄設定 ---
     st.sidebar.header("⚙️ 1. 蓋章頁面設定")
     apply_mode = st.sidebar.radio("蓋章範圍", ["單頁", "全頁 (所有頁面)"])
     page_num = st.sidebar.number_input("目標 / 預覽頁數", min_value=1, max_value=len(doc), value=1)
     page_index = page_num - 1
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**📐 印章實際列印尺寸 (公分)**")
+    st.sidebar.caption("提示：系統已自動裁去印章圖檔的透明邊緣，請直接輸入實體印章大小。")
+    stamp_w_cm = st.sidebar.number_input("印章寬度 (公分)", value=3.00, min_value=0.10, max_value=20.00, step=0.10, format="%.2f")
+    stamp_w_pts = stamp_w_cm * CM_TO_PTS
     
-    # 抓取該頁影像 (使用 72 DPI，這樣 1 像素剛好等於 PDF 的 1 點，座標轉換最精準)
+    st.sidebar.header("🛠️ 2. 影像微調")
+    stamp_opacity = st.sidebar.slider("💧 印章不透明度", 0.1, 1.0, 1.0, 0.05)
+    auto_bg_remove = st.sidebar.checkbox("✨ 自動濾除印章白底", value=True)
+    flip_horizontal = st.sidebar.checkbox("↔️ 水平翻轉", value=False)
+    flip_vertical = st.sidebar.checkbox("↕️ 垂直翻轉", value=False)
+    rotation_angle = st.sidebar.select_slider("🔄 印章旋轉角度", options=[0, 90, 180, 270, 360], value=0)
+    
+    if st.sidebar.button("🗑️ 清除印章重蓋"):
+        st.session_state.stamp_pos = None
+        st.rerun()
+
+    # --- 處理印章 ---
+    stamp_file.seek(0)
+    final_stamp = process_stamp(stamp_file, auto_bg_remove, flip_horizontal, flip_vertical, rotation_angle, stamp_opacity)
+    
+    # 計算印章在 PDF 中的物理高度 (Points)
+    pillow_ratio = final_stamp.width / final_stamp.height
+    stamp_h_pts = stamp_w_pts / pillow_ratio
+
+    # --- 產生高畫質背景圖 (保留你原本的 Matrix(2.0, 2.0)) ---
     target_page = doc[page_index]
-    pix = target_page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
-    pdf_bg_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    zoom = 2.0
+    zoom_matrix = fitz.Matrix(zoom, zoom) 
+    pix = target_page.get_pixmap(matrix=zoom_matrix)
+    pdf_bg_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGBA")
+
+    # 換算印章在預覽圖上的像素大小
+    preview_stamp_w = int(stamp_w_pts * zoom)
+    preview_stamp_h = int(stamp_h_pts * zoom)
     
-    # --- 主畫面分為左右兩欄：左邊拖曳定位，右邊預覽與下載 ---
-    col_main1, col_main2 = st.columns([1.2, 1])
+    # 調整預覽用印章大小
+    if preview_stamp_w > 0 and preview_stamp_h > 0:
+        preview_stamp = final_stamp.resize((preview_stamp_w, preview_stamp_h), Image.Resampling.LANCZOS)
+    else:
+        preview_stamp = final_stamp
+
+    # --- 單一互動預覽區 ---
+    st.markdown("### 👁️ 文件預覽與蓋章區")
+    st.info("💡 **操作方式：** 直接在下方文件點擊您想蓋章的位置（這會是印章的**正中心**）。如需修改，直接點擊新的位置即可。")
     
-    with col_main1:
-        st.write("### 📍 步驟一：拖曳紅框決定位置")
-        st.info("提示：只需要移動紅框的**左上角**到你要蓋章的位置即可。紅框大小不影響，印章實際大小請由側邊欄設定。")
+    display_img = pdf_bg_img.copy()
+
+    # 如果已經有點擊座標，將預覽印章貼上 (採用中心對齊以提升手感)
+    if st.session_state.stamp_pos is not None:
+        click_px_x, click_px_y = st.session_state.stamp_pos
+        paste_x = int(click_px_x - (preview_stamp.width / 2))
+        paste_y = int(click_px_y - (preview_stamp.height / 2))
+        display_img.paste(preview_stamp, (paste_x, paste_y), preview_stamp)
+
+    # 顯示可互動畫布，使用 use_column_width=True 滿版顯示
+    clicked_value = streamlit_image_coordinates(display_img, key="interactive_canvas", use_column_width=True)
+
+    # 座標更新與畫面重整
+    if clicked_value is not None:
+        new_pos = (clicked_value["x"], clicked_value["y"])
+        if st.session_state.stamp_pos != new_pos:
+            st.session_state.stamp_pos = new_pos
+            st.rerun()
+
+    # --- 蓋章寫入 PDF 與下載 ---
+    if st.session_state.stamp_pos is not None:
+        st.markdown("---")
+        st.success("🎉 印章已定位！確認無誤後即可下載。")
         
-        # 使用 cropper 但只取座標 (return_type='box')
-        box_coords = st_cropper(
-            pdf_bg_img, 
-            aspect_ratio=None, 
-            box_color='#FF0000',
-            return_type='box',  # 關鍵：不回傳圖片，只回傳座標字典
-            key='stamp_positioner'
-        )
+        # 1. 座標轉換 (Pixels -> PDF Points)
+        click_px_x, click_px_y = st.session_state.stamp_pos
+        pdf_center_x = click_px_x / zoom
+        pdf_center_y = click_px_y / zoom
         
-        # 轉換座標：cropper 回傳的是 pixel，但在我們的設定下 1 pixel = 1 point
-        x_pos = box_coords['left']
-        y_pos = box_coords['top']
+        # 從中心點推算左上角座標
+        rect_x = pdf_center_x - (stamp_w_pts / 2)
+        rect_y = pdf_center_y - (stamp_h_pts / 2)
         
-    with col_main2:
-        # 側邊欄：實體尺寸設定
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("**📐 印章實際列印尺寸 (公分)**")
-        st.sidebar.caption("提示：系統已自動裁去印章圖檔的透明邊緣，請直接輸入實體印章大小。")
-        stamp_w_cm = st.sidebar.number_input("印章寬度 (公分)", value=3.00, min_value=0.10, max_value=20.00, step=0.10, format="%.2f")
-        stamp_w = stamp_w_cm * CM_TO_PTS
+        # 建立 PDF 的矩形插入範圍
+        rect = fitz.Rect(rect_x, rect_y, rect_x + stamp_w_pts, rect_y + stamp_h_pts)
         
-        # 側邊欄：影像微調
-        st.sidebar.header("🛠️ 2. 影像微調")
-        stamp_opacity = st.sidebar.slider("💧 印章不透明度", 0.1, 1.0, 1.0, 0.05)
-        auto_bg_remove = st.sidebar.checkbox("✨ 自動濾除印章白底", value=True)
-        flip_horizontal = st.sidebar.checkbox("↔️ 水平翻轉", value=False)
-        flip_vertical = st.sidebar.checkbox("↕️ 垂直翻轉", value=False)
-        rotation_angle = st.sidebar.select_slider("🔄 印章旋轉角度", options=[0, 90, 180, 270, 360], value=0)
-        
-        # --- 處理印章並蓋上 PDF ---
-        stamp_file.seek(0)
-        final_stamp = process_stamp(stamp_file, auto_bg_remove, flip_horizontal, flip_vertical, rotation_angle, stamp_opacity)
-        
+        # 將最終印章轉為 Bytes
         stamp_bytes_io = io.BytesIO()
         final_stamp.save(stamp_bytes_io, format="PNG")
         stamp_bytes = stamp_bytes_io.getvalue()
-        
-        # 依照處理完的印章長寬比，動態計算高度
-        pillow_ratio = final_stamp.width / final_stamp.height
-        dynamic_rect_h = stamp_w / pillow_ratio
-        
-        # 定義蓋章區域 (X與Y來自拖曳框，寬高來自側邊欄公分換算)
-        rect = fitz.Rect(x_pos, y_pos, x_pos + stamp_w, y_pos + dynamic_rect_h)
         
         # 執行蓋章
         if apply_mode == "全頁 (所有頁面)":
@@ -135,19 +192,10 @@ if pdf_file and stamp_file:
         else:
             target_page.insert_image(rect, stream=stamp_bytes)
             
-        # 產生高畫質預覽圖
-        st.write("### 👁️ 步驟二：即時高畫質預覽")
-        zoom_matrix = fitz.Matrix(2.0, 2.0) 
-        preview_pix = target_page.get_pixmap(matrix=zoom_matrix)
-        img_preview = Image.frombytes("RGB", [preview_pix.width, preview_pix.height], preview_pix.samples)
-        
-        st.image(img_preview, caption=f"第 {page_num} 頁蓋章結果", use_container_width=True)
-        
         # 提供下載
         output_pdf = io.BytesIO()
         doc.save(output_pdf)
         
-        st.success("🎉 預覽無誤後即可下載！")
         st.download_button(
             label="📥 點我下載已蓋章 PDF",
             data=output_pdf.getvalue(),
@@ -156,3 +204,6 @@ if pdf_file and stamp_file:
             type="primary",
             use_container_width=True
         )
+
+else:
+    st.info("請先在上方上傳「PDF 檔案」與「印章圖檔」。")
