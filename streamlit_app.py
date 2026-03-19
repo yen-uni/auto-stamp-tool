@@ -5,7 +5,7 @@ import numpy as np
 import io
 from streamlit_cropper import st_cropper
 
-st.set_page_config(page_title="環久國際機構-蓋章小工具V8.1 (UI優化版)", page_icon="📄", layout="wide")
+st.set_page_config(page_title="環久國際機構-蓋章小工具V8.3 (多章預覽版)", page_icon="📄", layout="wide")
 
 # 將公分轉換為 PyMuPDF 支援的「點 (Points)」(1 公分 ≈ 28.346 點)
 CM_TO_PTS = 28.346
@@ -48,7 +48,7 @@ def process_stamp(img_file, remove_bg, flip_h, flip_v, rotation_angle, opacity):
             
     return img
 
-st.title("📄 環久國際機構-蓋章小工具V8.1")
+st.title("📄 環久國際機構-蓋章小工具V8.3")
 
 # ==========================================
 # 側邊欄：全域印章設定 (步驟一與步驟二共用)
@@ -61,7 +61,7 @@ auto_bg_remove = st.sidebar.checkbox("✨ 自動濾除印章白底", value=True)
 rotation_angle = st.sidebar.select_slider("🔄 印章旋轉角度", options=[0, 90, 180, 270, 360], value=0)
 
 # ==========================================
-# 主畫面：三步驟流程 (新增 Tab 3)
+# 主畫面：三步驟流程 
 # ==========================================
 tab1, tab2, tab3 = st.tabs(["📍 步驟一：視覺對照確認尺寸", "🖨️ 步驟二：套印新文件", "📑 步驟三：多印章套印"])
 
@@ -96,7 +96,6 @@ with tab1:
         with col_ref2:
             st.markdown("**🔍 對照預覽區**")
             
-            # 【優化】將提示訊息移至圖面上方
             st.success("✅ 尺寸確認 OK 後，請切換到上方「步驟二」頁籤。")
             
             stamp_w_pts = stamp_w_cm * CM_TO_PTS
@@ -122,7 +121,6 @@ with tab1:
             preview_img_pix = preview_doc[0].get_pixmap(matrix=zoom_matrix)
             preview_img = Image.frombytes("RGB", [preview_img_pix.width, preview_img_pix.height], preview_img_pix.samples)
             
-            # 【優化】利用欄位比例將圖面縮小為 80% (1:8:1) 並置中
             c1, c2, c3 = st.columns([1, 8, 1])
             with c2:
                 st.image(preview_img, caption=f"對位預覽 (印章設定為 {stamp_w_cm} 公分)", use_container_width=True)
@@ -188,7 +186,6 @@ with tab2:
             output_pdf = io.BytesIO()
             target_doc.save(output_pdf)
             
-            # 【優化】將下載按鈕移至圖面上方
             st.download_button(
                 label="📥 點我下載已蓋章 PDF",
                 data=output_pdf.getvalue(),
@@ -202,13 +199,12 @@ with tab2:
             final_pix = target_page.get_pixmap(matrix=zoom_matrix)
             final_img = Image.frombytes("RGB", [final_pix.width, final_pix.height], final_pix.samples)
             
-            # 【優化】利用欄位比例將圖面縮小為 80% (1:8:1) 並置中
             c4, c5, c6 = st.columns([1, 8, 1])
             with c5:
                 st.image(final_img, caption="最終成品預覽 (中心點對位)", use_container_width=True)
 
 # ------------------------------------------
-# 📑 步驟三：多印章套印 (新增)
+# 📑 步驟三：多印章套印 (新增預覽功能)
 # ------------------------------------------
 with tab3:
     st.markdown("### 1. 上傳欲套印之「空白」 PDF 檔案")
@@ -223,7 +219,6 @@ with tab3:
 
         all_stamps_data = []
 
-        # 讀取 PDF
         doc_multi = fitz.open(stream=multi_pdf_file.read(), filetype="pdf")
         page_index_multi = page_num_multi - 1
         
@@ -235,24 +230,63 @@ with tab3:
             bg_multi = Image.frombytes("RGB", [pix_multi.width, pix_multi.height], pix_multi.samples)
 
             st.markdown("### 2. 依序設定各別印章與位置")
-            st.info("請於下方展開對應印章的設定面板。這裡會套用左側全域的「去背」與「透明度」設定。")
+            st.info("請於下方展開對應印章的設定面板。會即時顯示「該印章」疊加上去的預覽效果。")
             
             for i in range(stamp_count):
                 with st.expander(f"📌 第 {i+1} 個印章設定", expanded=(i==0)):
-                    c1, c2 = st.columns([1, 1.5])
-                    with c1:
+                    # 上層：參數設定
+                    c_up1, c_up2, c_up3 = st.columns(3)
+                    with c_up1:
                         s_file = st.file_uploader(f"💮 上傳印章 {i+1}", type=["png", "jpg", "jpeg"], key=f"s_f_{i}")
+                    with c_up2:
                         s_w = st.number_input(f"📐 印章寬度 (cm)", value=3.00, step=0.10, key=f"s_w_{i}")
+                    with c_up3:
                         s_rot = st.selectbox(f"🔄 旋轉", [0, 90, 180, 270, 360], key=f"s_r_{i}")
-                    with c2:
-                        if s_file:
+                    
+                    if s_file:
+                        st.markdown("---")
+                        # 下層：左邊定位、右邊預覽
+                        c_crop, c_prev = st.columns([1.2, 1])
+                        
+                        with c_crop:
                             st.caption("拖曳紅框，將「中心點」對準欲蓋章位置")
                             coords = st_cropper(bg_multi, aspect_ratio=None, box_color='#FF0000', return_type='box', key=f"s_c_{i}")
                             all_stamps_data.append({
                                 "file": s_file, "width": s_w, "rot": s_rot, "coords": coords
                             })
-                        else:
-                            st.warning("請先上傳此印章的圖檔")
+                            
+                        with c_prev:
+                            st.markdown("**🔍 單章對位即時預覽**")
+                            s_file.seek(0)
+                            # 生成單張預覽印章
+                            preview_stamp = process_stamp(s_file, auto_bg_remove, False, False, s_rot, stamp_opacity)
+                            
+                            cx = coords['left'] + (coords['width'] / 2)
+                            cy = coords['top'] + (coords['height'] / 2)
+                            sw_pts = s_w * CM_TO_PTS
+                            sh_pts = sw_pts / (preview_stamp.width / preview_stamp.height)
+                            
+                            rect_x0 = cx - (sw_pts / 2)
+                            rect_y0 = cy - (sh_pts / 2)
+                            rect_x1 = cx + (sw_pts / 2)
+                            rect_y1 = cy + (sh_pts / 2)
+                            
+                            # 建立一個乾淨的 PDF 頁面來疊加這個預覽
+                            preview_doc_multi = fitz.open(stream=multi_pdf_file.getvalue(), filetype="pdf")
+                            preview_page_multi = preview_doc_multi[page_index_multi]
+                            rect = fitz.Rect(rect_x0, rect_y0, rect_x1, rect_y1)
+                            
+                            stamp_bytes_io = io.BytesIO()
+                            preview_stamp.save(stamp_bytes_io, format="PNG")
+                            preview_page_multi.insert_image(rect, stream=stamp_bytes_io.getvalue())
+                            
+                            zoom_matrix = fitz.Matrix(2.0, 2.0)
+                            preview_pix = preview_page_multi.get_pixmap(matrix=zoom_matrix)
+                            preview_img = Image.frombytes("RGB", [preview_pix.width, preview_pix.height], preview_pix.samples)
+                            
+                            st.image(preview_img, caption=f"預覽 (印章 {i+1})", use_container_width=True)
+                    else:
+                        st.warning("請先上傳此印章的圖檔，才能進行定位與預覽。")
 
             st.markdown("---")
             if len(all_stamps_data) == stamp_count:
@@ -260,7 +294,6 @@ with tab3:
                     with st.spinner("正在合成中..."):
                         for data in all_stamps_data:
                             data["file"].seek(0)
-                            # 處理每顆印章圖檔，套用全域的去背與透明度
                             processed = process_stamp(data["file"], auto_bg_remove, False, False, data["rot"], stamp_opacity)
                             img_byte_arr = io.BytesIO()
                             processed.save(img_byte_arr, format='PNG')
