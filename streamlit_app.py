@@ -8,7 +8,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 # ==========================================
 # 0. 頁面基本設定與 CSS 注入
 # ==========================================
-st.set_page_config(page_title="環久國際機構-蓋章小工具V7互動版", page_icon="📄", layout="wide")
+st.set_page_config(page_title="環久國際機構-蓋章小工具V7.1座標修正版", page_icon="📄", layout="wide")
 
 # 強制游標顯示為十字線
 st.markdown(
@@ -28,7 +28,7 @@ if "stamp_pos" not in st.session_state:
 CM_TO_PTS = 28.346 # 1公分 ≈ 28.346點 (PDF標準單位)
 
 # ==========================================
-# 1. 側邊欄 UI (完美融合 V6 選項與微調功能)
+# 1. 側邊欄 UI
 # ==========================================
 st.sidebar.header("⚙️ 1. 印章位置與頁面設定")
 apply_mode = st.sidebar.radio("蓋章範圍", ["單頁", "全頁 (所有頁面)"])
@@ -52,7 +52,6 @@ if st.sidebar.button("🗑️ 清除印章重蓋"):
 # ==========================================
 col_up1, col_up2 = st.columns(2)
 with col_up1:
-    # 這裡改回只接受 PDF
     pdf_file = st.file_uploader("📁 1. 上傳 PDF 檔案", type=["pdf"])
 with col_up2:
     stamp_file = st.file_uploader("💮 2. 上傳印章圖檔", type=["png", "jpg", "jpeg"])
@@ -93,25 +92,27 @@ if pdf_file and stamp_file:
         else:
             page = doc[page_index]
             
-            # 設定預覽圖的解析度 (計算 zoom 以符合約 1200px 寬度，兼顧畫質與效能)
+            # 設定預覽圖的解析度 (計算 zoom 以符合約 1200px 寬度)
             max_interactive_width = 1200
             zoom = max_interactive_width / page.rect.width
             matrix = fitz.Matrix(zoom, zoom)
             pix = page.get_pixmap(matrix=matrix)
             
-            # 將 PDF 頁面轉為 PIL 圖片供畫布使用
+            # 將 PDF 頁面轉為 PIL 圖片供畫布使用 (doc_img 尺寸 = pix 尺寸)
             doc_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGBA")
 
-            # --- C. 印章尺寸換算 ---
-            # 計算印章在 PDF 真實尺寸 (Points) 與 螢幕預覽尺寸 (Pixels)
-            stamp_w_pts = stamp_width_cm * CM_TO_PTS
-            stamp_w_px = int(stamp_w_pts * zoom)
+            # --- C. 印章預覽尺寸換算 (螢幕上看到的尺寸) ---
+            # 根據 cm 換算 Points，再換算為 Pixels
+            stamp_w_pts_initial = stamp_width_cm * CM_TO_PTS
+            stamp_w_px = int(stamp_w_pts_initial * zoom)
             
             # 依比例縮放印章預覽圖
-            stamp_ratio = stamp_w_px / stamp_img.width  
-            new_size = (stamp_w_px, int(stamp_img.height * stamp_ratio))
-            if new_size[0] > 0 and new_size[1] > 0:
-                stamp_img = stamp_img.resize(new_size, Image.Resampling.LANCZOS)
+            stamp_ratio_px = stamp_w_px / stamp_img.width  
+            new_size_px = (stamp_w_px, int(stamp_img.height * stamp_ratio_px))
+            if new_size_px[0] > 0 and new_size_px[1] > 0:
+                stamp_preview_img = stamp_img.resize(new_size_px, Image.Resampling.LANCZOS)
+            else:
+                stamp_preview_img = stamp_img
 
             # --- D. 互動預覽區 ---
             st.markdown("### 👁️ 文件預覽與蓋章區")
@@ -119,17 +120,17 @@ if pdf_file and stamp_file:
 
             display_img = doc_img.copy()
 
-            # 如果已經有座標紀錄，就在「預覽圖」上合成印章
+            # 如果已經有座標紀錄，就在「預覽圖像素 (doc_img)」上合成印章預覽圖
             if st.session_state.stamp_pos is not None:
                 px_x, px_y = st.session_state.stamp_pos
-                display_img.paste(stamp_img, (px_x, px_y), stamp_img)
+                display_img.paste(stamp_preview_img, (px_x, px_y), stamp_preview_img)
 
             # 版面控制：置中顯示，寬度稍微縮小視覺佔比
             st.markdown("<br>", unsafe_allow_html=True)
             pre_col1, pre_col2, pre_col3 = st.columns([1, 10, 1]) 
 
             with pre_col2:
-                # use_column_width=True 會讓圖片撐滿這 10 等分的寬度，視覺上就是縮小 80% 的感覺
+                # 取得點擊在 display_img 上的原始像素座標
                 clicked_value = streamlit_image_coordinates(display_img, key="interactive_canvas", use_column_width=True)
 
             # 偵測點擊，更新座標
@@ -139,23 +140,36 @@ if pdf_file and stamp_file:
                     st.session_state.stamp_pos = new_pos
                     st.rerun()
 
-            # --- E. 產生已蓋章的 PDF 供下載 ---
+            # --- E. 產生已蓋章的 PDF 供下載 (物理座標精準修正) ---
             if st.session_state.stamp_pos is not None:
                 st.markdown("---")
                 st.success("🎉 印章已定位！請點擊下方按鈕下載完成的 PDF 檔。")
                 
-                # 1. 座標轉換 (Pixels -> PDF Points)
+                # ==========================================
+                # **核心修復 1：精準座標轉換 (Pixels -> PDF Points)**
+                # 必須分別計算 X 與 Y 的真實長寬比例
+                # ==========================================
                 px_x, px_y = st.session_state.stamp_pos
-                pdf_x = px_x / zoom
-                pdf_y = px_y / zoom
                 
-                # 計算印章在 PDF 中的高度
-                stamp_h_pts = stamp_w_pts * (stamp_img.height / stamp_img.width)
+                # 計算生成的預覽像素圖(doc_img/pix)與 PDF 物理點(page.rect)之間的真實長寬比例
+                # ratio_x = 物理點 / 像素
+                ratio_x = page.rect.width / pix.width
+                ratio_y = page.rect.height / pix.height
+
+                # 將點擊的像素座標精準還原為 PDF 的 Points 座標
+                pdf_x = px_x * ratio_x
+                pdf_y = px_y * ratio_y
+                
+                # 計算印章在 PDF 中的物理尺寸 (Points)
+                stamp_w_pts = stamp_width_cm * CM_TO_PTS
+                # 依據印章原圖（或處理旋轉後）的長寬比計算高度物理點
+                stamp_aspect_ratio = stamp_img.height / stamp_img.width
+                stamp_h_pts = stamp_w_pts * stamp_aspect_ratio
                 
                 # 建立 PDF 的矩形插入範圍
                 rect = fitz.Rect(pdf_x, pdf_y, pdf_x + stamp_w_pts, pdf_y + stamp_h_pts)
                 
-                # 2. 將處理好的印章轉為 Bytes
+                # 將處理好的 PIL 印章 Image 轉為 Bytes 供 PyMuPDF 使用
                 stamp_bytes_io = io.BytesIO()
                 stamp_img.save(stamp_bytes_io, format="PNG")
                 stamp_bytes = stamp_bytes_io.getvalue()
@@ -163,6 +177,7 @@ if pdf_file and stamp_file:
                 # 3. 根據選項執行蓋章
                 if apply_mode == "全頁 (所有頁面)":
                     for p in doc:
+                        # 將印章插入指定的 rect 範圍內
                         p.insert_image(rect, stream=stamp_bytes)
                 else:
                     # 單頁模式
