@@ -2,4 +2,4 @@ streamlit
 PyMuPDF
 Pillow
 numpy
-streamlit-image-coordinates
+streamlit-cropper
