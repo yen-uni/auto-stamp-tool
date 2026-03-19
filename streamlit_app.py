@@ -61,9 +61,9 @@ auto_bg_remove = st.sidebar.checkbox("✨ 自動濾除印章白底", value=True)
 rotation_angle = st.sidebar.select_slider("🔄 印章旋轉角度", options=[0, 90, 180, 270, 360], value=0)
 
 # ==========================================
-# 主畫面：雙步驟流程
+# 主畫面：三步驟流程 (新增 Tab 3)
 # ==========================================
-tab1, tab2 = st.tabs(["📍 步驟一：視覺對照確認尺寸", "🖨️ 步驟二：套印新文件"])
+tab1, tab2, tab3 = st.tabs(["📍 步驟一：視覺對照確認尺寸", "🖨️ 步驟二：套印新文件", "📑 步驟三：多印章套印"])
 
 # ------------------------------------------
 # 📍 步驟一：視覺對照確認尺寸
@@ -206,3 +206,81 @@ with tab2:
             c4, c5, c6 = st.columns([1, 8, 1])
             with c5:
                 st.image(final_img, caption="最終成品預覽 (中心點對位)", use_container_width=True)
+
+# ------------------------------------------
+# 📑 步驟三：多印章套印 (新增)
+# ------------------------------------------
+with tab3:
+    st.markdown("### 1. 上傳欲套印之「空白」 PDF 檔案")
+    multi_pdf_file = st.file_uploader("📁 上傳 PDF (多章模式)", type=["pdf"], key="multi_pdf")
+
+    if multi_pdf_file:
+        st.markdown("---")
+        col_cfg1, col_cfg2 = st.columns([1, 2])
+        with col_cfg1:
+            stamp_count = st.number_input("🔢 需要蓋幾個不同的章？", min_value=1, max_value=6, value=3)
+            page_num_multi = st.number_input("📄 目標頁碼 (多章)", min_value=1, value=1)
+
+        all_stamps_data = []
+
+        # 讀取 PDF
+        doc_multi = fitz.open(stream=multi_pdf_file.read(), filetype="pdf")
+        page_index_multi = page_num_multi - 1
+        
+        if page_index_multi >= len(doc_multi):
+            st.warning("頁碼超出範圍！")
+        else:
+            page_multi = doc_multi[page_index_multi]
+            pix_multi = page_multi.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+            bg_multi = Image.frombytes("RGB", [pix_multi.width, pix_multi.height], pix_multi.samples)
+
+            st.markdown("### 2. 依序設定各別印章與位置")
+            st.info("請於下方展開對應印章的設定面板。這裡會套用左側全域的「去背」與「透明度」設定。")
+            
+            for i in range(stamp_count):
+                with st.expander(f"📌 第 {i+1} 個印章設定", expanded=(i==0)):
+                    c1, c2 = st.columns([1, 1.5])
+                    with c1:
+                        s_file = st.file_uploader(f"💮 上傳印章 {i+1}", type=["png", "jpg", "jpeg"], key=f"s_f_{i}")
+                        s_w = st.number_input(f"📐 印章寬度 (cm)", value=3.00, step=0.10, key=f"s_w_{i}")
+                        s_rot = st.selectbox(f"🔄 旋轉", [0, 90, 180, 270, 360], key=f"s_r_{i}")
+                    with c2:
+                        if s_file:
+                            st.caption("拖曳紅框，將「中心點」對準欲蓋章位置")
+                            coords = st_cropper(bg_multi, aspect_ratio=None, box_color='#FF0000', return_type='box', key=f"s_c_{i}")
+                            all_stamps_data.append({
+                                "file": s_file, "width": s_w, "rot": s_rot, "coords": coords
+                            })
+                        else:
+                            st.warning("請先上傳此印章的圖檔")
+
+            st.markdown("---")
+            if len(all_stamps_data) == stamp_count:
+                if st.button("🚀 開始一鍵合成所有印章", type="primary", use_container_width=True):
+                    with st.spinner("正在合成中..."):
+                        for data in all_stamps_data:
+                            data["file"].seek(0)
+                            # 處理每顆印章圖檔，套用全域的去背與透明度
+                            processed = process_stamp(data["file"], auto_bg_remove, False, False, data["rot"], stamp_opacity)
+                            img_byte_arr = io.BytesIO()
+                            processed.save(img_byte_arr, format='PNG')
+
+                            cx = data["coords"]['left'] + (data["coords"]['width'] / 2)
+                            cy = data["coords"]['top'] + (data["coords"]['height'] / 2)
+                            sw_pts = data["width"] * CM_TO_PTS
+                            sh_pts = sw_pts / (processed.width / processed.height)
+
+                            rect = fitz.Rect(cx - sw_pts/2, cy - sh_pts/2, cx + sw_pts/2, cy + sh_pts/2)
+                            page_multi.insert_image(rect, stream=img_byte_arr.getvalue())
+
+                        out_multi = io.BytesIO()
+                        doc_multi.save(out_multi)
+
+                        st.success("✅ 全部印章套印完成！")
+                        st.download_button(
+                            label="📥 下載多章合成文件",
+                            data=out_multi.getvalue(),
+                            file_name=f"多章套印_{multi_pdf_file.name}",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
