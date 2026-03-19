@@ -8,7 +8,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 # ==========================================
 # 0. 頁面基本設定與 CSS 注入
 # ==========================================
-st.set_page_config(page_title="環久國際機構-蓋章小工具V7.1座標修正版", page_icon="📄", layout="wide")
+st.set_page_config(page_title="環久國際機構-蓋章小工具V7.2精準中心對齊版", page_icon="📄", layout="wide")
 
 # 強制游標顯示為十字線
 st.markdown(
@@ -83,7 +83,6 @@ if pdf_file and stamp_file:
 
 
         # --- B. 讀取 PDF 與渲染預覽圖 ---
-        # 使用 getvalue() 避免 Streamlit 重複讀取指標問題
         doc = fitz.open(stream=pdf_file.getvalue(), filetype="pdf")
         page_index = page_num - 1
         
@@ -92,17 +91,16 @@ if pdf_file and stamp_file:
         else:
             page = doc[page_index]
             
-            # 設定預覽圖的解析度 (計算 zoom 以符合約 1200px 寬度)
+            # 設定預覽圖的解析度
             max_interactive_width = 1200
             zoom = max_interactive_width / page.rect.width
             matrix = fitz.Matrix(zoom, zoom)
             pix = page.get_pixmap(matrix=matrix)
             
-            # 將 PDF 頁面轉為 PIL 圖片供畫布使用 (doc_img 尺寸 = pix 尺寸)
+            # 將 PDF 頁面轉為 PIL 圖片供畫布使用
             doc_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGBA")
 
-            # --- C. 印章預覽尺寸換算 (螢幕上看到的尺寸) ---
-            # 根據 cm 換算 Points，再換算為 Pixels
+            # --- C. 印章預覽尺寸換算 ---
             stamp_w_pts_initial = stamp_width_cm * CM_TO_PTS
             stamp_w_px = int(stamp_w_pts_initial * zoom)
             
@@ -116,74 +114,73 @@ if pdf_file and stamp_file:
 
             # --- D. 互動預覽區 ---
             st.markdown("### 👁️ 文件預覽與蓋章區")
-            st.markdown("💡 **操作方式：** 直接在下方文件點擊您想蓋章的位置（游標為十字線）。如需修改，直接點擊**新的位置**即可。")
+            st.markdown("💡 **操作方式：** 直接在下方文件點擊您想蓋章的位置（**這會是對齊印章的正中心**）。如需修改，直接點擊新的位置即可。")
 
             display_img = doc_img.copy()
 
-            # 如果已經有座標紀錄，就在「預覽圖像素 (doc_img)」上合成印章預覽圖
+            # ==========================================
+            # 核心修復 1：預覽圖的「中心點對齊」邏輯
+            # ==========================================
             if st.session_state.stamp_pos is not None:
-                px_x, px_y = st.session_state.stamp_pos
-                display_img.paste(stamp_preview_img, (px_x, px_y), stamp_preview_img)
+                click_px_x, click_px_y = st.session_state.stamp_pos
+                
+                # 計算要貼上印章的「左上角」座標 (讓點擊位置成為中心點)
+                top_left_x = int(click_px_x - (stamp_preview_img.width / 2))
+                top_left_y = int(click_px_y - (stamp_preview_img.height / 2))
+                
+                display_img.paste(stamp_preview_img, (top_left_x, top_left_y), stamp_preview_img)
 
-            # 版面控制：置中顯示，寬度稍微縮小視覺佔比
             st.markdown("<br>", unsafe_allow_html=True)
             pre_col1, pre_col2, pre_col3 = st.columns([1, 10, 1]) 
 
             with pre_col2:
-                # 取得點擊在 display_img 上的原始像素座標
                 clicked_value = streamlit_image_coordinates(display_img, key="interactive_canvas", use_column_width=True)
 
-            # 偵測點擊，更新座標
             if clicked_value is not None:
                 new_pos = (clicked_value["x"], clicked_value["y"])
                 if st.session_state.stamp_pos != new_pos:
                     st.session_state.stamp_pos = new_pos
                     st.rerun()
 
-            # --- E. 產生已蓋章的 PDF 供下載 (物理座標精準修正) ---
+            # --- E. 產生已蓋章的 PDF 供下載 ---
             if st.session_state.stamp_pos is not None:
                 st.markdown("---")
                 st.success("🎉 印章已定位！請點擊下方按鈕下載完成的 PDF 檔。")
                 
                 # ==========================================
-                # **核心修復 1：精準座標轉換 (Pixels -> PDF Points)**
-                # 必須分別計算 X 與 Y 的真實長寬比例
+                # 核心修復 2：PDF 物理座標的「中心點對齊」邏輯
                 # ==========================================
-                px_x, px_y = st.session_state.stamp_pos
+                click_px_x, click_px_y = st.session_state.stamp_pos
                 
-                # 計算生成的預覽像素圖(doc_img/pix)與 PDF 物理點(page.rect)之間的真實長寬比例
-                # ratio_x = 物理點 / 像素
                 ratio_x = page.rect.width / pix.width
                 ratio_y = page.rect.height / pix.height
 
-                # 將點擊的像素座標精準還原為 PDF 的 Points 座標
-                pdf_x = px_x * ratio_x
-                pdf_y = px_y * ratio_y
+                # 1. 先找出點擊位置在 PDF 上的「物理中心點座標」
+                center_pdf_x = click_px_x * ratio_x
+                center_pdf_y = click_px_y * ratio_y
                 
-                # 計算印章在 PDF 中的物理尺寸 (Points)
+                # 2. 計算印章在 PDF 中的物理尺寸 (Points)
                 stamp_w_pts = stamp_width_cm * CM_TO_PTS
-                # 依據印章原圖（或處理旋轉後）的長寬比計算高度物理點
                 stamp_aspect_ratio = stamp_img.height / stamp_img.width
                 stamp_h_pts = stamp_w_pts * stamp_aspect_ratio
                 
-                # 建立 PDF 的矩形插入範圍
-                rect = fitz.Rect(pdf_x, pdf_y, pdf_x + stamp_w_pts, pdf_y + stamp_h_pts)
+                # 3. 從中心點往回推算 PDF 的左上角座標
+                pdf_top_left_x = center_pdf_x - (stamp_w_pts / 2)
+                pdf_top_left_y = center_pdf_y - (stamp_h_pts / 2)
                 
-                # 將處理好的 PIL 印章 Image 轉為 Bytes 供 PyMuPDF 使用
+                # 建立 PDF 的矩形插入範圍
+                rect = fitz.Rect(pdf_top_left_x, pdf_top_left_y, pdf_top_left_x + stamp_w_pts, pdf_top_left_y + stamp_h_pts)
+                
                 stamp_bytes_io = io.BytesIO()
                 stamp_img.save(stamp_bytes_io, format="PNG")
                 stamp_bytes = stamp_bytes_io.getvalue()
                 
-                # 3. 根據選項執行蓋章
                 if apply_mode == "全頁 (所有頁面)":
                     for p in doc:
-                        # 將印章插入指定的 rect 範圍內
                         p.insert_image(rect, stream=stamp_bytes)
                 else:
-                    # 單頁模式
                     doc[page_index].insert_image(rect, stream=stamp_bytes)
                 
-                # 4. 準備下載
                 output_pdf = io.BytesIO()
                 doc.save(output_pdf)
                 
