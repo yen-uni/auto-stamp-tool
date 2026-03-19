@@ -3,7 +3,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 import numpy as np
 import io
-from streamlit_cropper import st_cropper
+from streamlit_image_coordinates import streamlit_image_coordinates
 
 # 1. 網頁基本設定
 st.set_page_config(page_title="環久國際機構-蓋章小工具V7.2極速版", page_icon="📄", layout="wide")
@@ -92,9 +92,25 @@ if pdf_file and stamp_file:
     # --- 畫面佈局：左側拖曳定位，右側預覽 ---
     col_pos, col_preview = st.columns([1.2, 1])
 
-    with col_pos:
-        st.write("### 📍 步驟一：拖曳紅框決定位置")
-        st.info("💡 提示：請將紅框的**「左上角」**移到蓋章處。紅框大小不影響結果。")
+with col_pos:
+     st.write("### 📍 步驟一：滑鼠點擊決定位置")
+     st.info("💡 提示：不需要拖曳了！請直接在下方文件上**「點擊」**你想蓋章的位置（印章的左上角起點）。")
+
+     # 獲取該頁底圖 (1.0 縮放確保 1px = 1pt)
+     target_page = doc[page_index]
+     pix = target_page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+     pdf_bg_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+     # 點擊定位組件 (取代原本的 cropper)
+     coords = streamlit_image_coordinates(pdf_bg_img, key="stamp_positioner")
+
+     # 取得點擊的座標 (如果還沒點擊，預設放在左上角 150, 150 的位置)
+     if coords is not None:
+         x_pos = coords['x']
+         y_pos = coords['y']
+     else:
+         x_pos = 150
+         y_pos = 150
         
         # 獲取該頁底圖 (1.0 縮放確保 1px = 1pt)
         target_page = doc[page_index]
